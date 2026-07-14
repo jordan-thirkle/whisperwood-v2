@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#1a2e1a" />
+    <title>Whisperwood — A Cozy Forest</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400;600&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="game-canvas" aria-label="Whisperwood forest exploration game"></canvas>
+      <section id="hud" aria-live="polite">
+        <div class="hud-metric">
+          <span>🌿 Found</span>
+          <strong><span id="score-value">0</span>/<span id="target-value">0</span></strong>
+        </div>
+        <div class="hud-metric">
+          <span>🕐 Time</span>
+          <strong id="timer-value">00:00</strong>
+        </div>
+        <div id="status-line">🌿 Explore the forest</div>
+      </section>
+      <div id="touch-controls" aria-hidden="true">
+        <div id="touch-stick">
+          <div id="touch-knob"></div>
+        </div>
+        <button id="dash-button" type="button">Run</button>
+      </div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
