@@ -1,0 +1,13 @@
+{
+  "screenshot": "D:\\Projects\\whisperwood-v2\\metrics\\screenshots\\screenshot-20260715_022938.png",
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "diff_percentage": 0,
+  "significant_change": false,
+  "note": "First screenshot \u2014 no previous to compare",
+  "timestamp": "20260715_022938",
+  "git_commit": "5cc3ecf",
+  "game": "whisperwood-v2"
+}

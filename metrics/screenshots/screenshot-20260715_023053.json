@@ -1,0 +1,16 @@
+{
+  "screenshot": "D:\\Projects\\whisperwood-v2\\metrics\\screenshots\\screenshot-20260715_023053.png",
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "diff_percentage": 1.28,
+  "changed_pixels": 35364,
+  "total_pixels": 2764800,
+  "diff_image": "D:\\Projects\\whisperwood-v2\\metrics\\screenshots\\screenshot-20260715_022938-diff.png",
+  "significant_change": false,
+  "previous_screenshot": "D:\\Projects\\whisperwood-v2\\metrics\\screenshots\\screenshot-20260715_022938.png",
+  "timestamp": "20260715_023053",
+  "git_commit": "5cc3ecf",
+  "game": "whisperwood-v2"
+}
