@@ -1,0 +1,15 @@
+{
+  "whisperwood-v2": {
+    "camera": {
+      "position": [0, 8, 15],
+      "lookAt": [0, 0, -5],
+      "fov": 48
+    },
+    "viewport": {
+      "width": 1280,
+      "height": 720
+    },
+    "wait_ms": 3000,
+    "notes": "Golden hour perspective. Camera fixed for all checkpoints."
+  }
+}
