@@ -152,6 +152,10 @@ export class Game {
       // v1: Particle burst on collect
       const color = this.getPickupColor(pickup);
       this.collectEffects.trigger(pickup.group.position.clone(), color);
+
+      // Screen shake on collection — subtle, scales with progress
+      const shakeIntensity = 0.08 + (this.score / this.pickups.length) * 0.04;
+      this.cameraRig.triggerShake(shakeIntensity, 0.25);
     }
 
     if (this.score >= this.pickups.length) {
@@ -336,7 +340,7 @@ export class Game {
     trunk.receiveShadow = true;
     tree.add(trunk);
 
-    // Canopy — layered cones for pine-tree look
+    // Canopy — layered cones for pine-tree look, with rotation and scale variation
     const layers = 2 + Math.floor(this.rng() * 2);
     for (let i = 0; i < layers; i++) {
       const layerY = height * 0.5 + i * (height * 0.25);
@@ -349,6 +353,13 @@ export class Game {
       });
       const canopy = new THREE.Mesh(canopyGeo, canopyMat);
       canopy.position.y = layerY;
+      // Slight random tilt for organic look
+      canopy.rotation.y = this.rng() * Math.PI * 2;
+      canopy.rotation.x = (this.rng() - 0.5) * 0.15;
+      canopy.rotation.z = (this.rng() - 0.5) * 0.15;
+      // Slight scale variation per layer
+      const scaleVar = 0.9 + this.rng() * 0.2;
+      canopy.scale.set(scaleVar, 0.95 + this.rng() * 0.1, scaleVar);
       canopy.castShadow = true;
       tree.add(canopy);
     }

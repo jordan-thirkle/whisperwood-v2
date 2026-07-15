@@ -1,16 +1,17 @@
 import * as THREE from 'three';
-import {
-  EffectComposer,
-  BloomEffect,
-  VignetteEffect,
-  ChromaticAberrationEffect,
-  RenderPass,
-} from 'postprocessing';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { VignetteShader } from 'three/examples/jsm/shaders/VignetteShader.js';
+import { RGBShiftShader } from 'three/examples/jsm/shaders/RGBShiftShader.js';
 
 export class PostProcessing {
   readonly composer: EffectComposer;
-  private readonly bloom: BloomEffect;
-  private readonly vignette: VignetteEffect;
+  private readonly bloom: UnrealBloomPass;
+  private readonly vignettePass: ShaderPass;
+  private readonly chromaticPass: ShaderPass;
 
   constructor(
     renderer: THREE.WebGLRenderer,
@@ -23,38 +24,38 @@ export class PostProcessing {
     const renderPass = new RenderPass(scene, camera);
     this.composer.addPass(renderPass);
 
-    // Bloom — warm glow on bright areas
-    this.bloom = new BloomEffect({
-      intensity: 0.4,
-      luminanceThreshold: 0.6,
-      luminanceSmoothing: 0.9,
-      mipmapBlur: true,
-    });
+    // Bloom — warm glow on bright areas (UnrealBloomPass)
+    const bloomResolution = new THREE.Vector2(window.innerWidth, window.innerHeight);
+    this.bloom = new UnrealBloomPass(bloomResolution, 0.4, 0.9, 0.6);
     this.composer.addPass(this.bloom);
 
     // Vignette — darken edges for cinematic feel
-    this.vignette = new VignetteEffect({
-      darkness: 0.45,
-      offset: 0.5,
-    });
-    this.composer.addPass(this.vignette);
+    this.vignettePass = new ShaderPass(VignetteShader);
+    this.vignettePass.uniforms['offset'].value = 0.5;
+    this.vignettePass.uniforms['darkness'].value = 0.45;
+    this.composer.addPass(this.vignettePass);
 
     // Chromatic aberration — subtle color fringing
-    const chromatic = new ChromaticAberrationEffect();
-    chromatic.offset.set(0.0005, 0.0005);
-    this.composer.addPass(chromatic);
+    this.chromaticPass = new ShaderPass(RGBShiftShader);
+    this.chromaticPass.uniforms['amount'].value = 0.0005;
+    this.chromaticPass.uniforms['angle'].value = 0.0;
+    this.composer.addPass(this.chromaticPass);
+
+    // Output pass — applies tone mapping and color space conversion
+    this.composer.addPass(new OutputPass());
   }
 
   setSize(width: number, height: number): void {
     this.composer.setSize(width, height);
+    this.bloom.resolution.set(width, height);
   }
 
   render(): void {
     this.composer.render();
   }
 
-  setBloomIntensity(intensity: number): void {
-    this.bloom.intensity = intensity;
+  setBloomIntensity(strength: number): void {
+    this.bloom.strength = strength;
   }
 
   dispose(): void {
