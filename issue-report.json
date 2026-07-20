@@ -1,0 +1,63 @@
+{
+  "project": "D:\\Projects\\whisperwood-v2",
+  "scan_date": "2026-07-16T16:01:39.671036",
+  "total_issues": 3,
+  "issues_by_severity": {
+    "critical": 0,
+    "high": 0,
+    "medium": 1,
+    "low": 2,
+    "info": 0
+  },
+  "issues_by_category": {
+    "security": 0,
+    "performance": 0,
+    "code_quality": 1,
+    "architecture": 1,
+    "testing": 1,
+    "accessibility": 0,
+    "documentation": 0,
+    "dependencies": 0
+  },
+  "issues": [
+    {
+      "title": "console.log() in production code",
+      "severity": "low",
+      "category": "code_quality",
+      "file_path": "tests\\bot-playtest.template.ts",
+      "line_number": 113,
+      "description": "Debug logging left in production code",
+      "evidence": "console.log(`bot playtest: ${JSON.stringify(report)}`);",
+      "impact": "Performance overhead, information leakage",
+      "suggested_fix": "Remove or replace with proper logging",
+      "related_issues": [],
+      "detected_at": "2026-07-16T16:01:37.902131"
+    },
+    {
+      "title": "Large file: ForestBuilder.ts (563 lines)",
+      "severity": "medium",
+      "category": "architecture",
+      "file_path": "src\\environment\\ForestBuilder.ts",
+      "line_number": 1,
+      "description": "File is 563 lines long",
+      "evidence": "Total lines: 563",
+      "impact": "Hard to maintain, test, and understand",
+      "suggested_fix": "Split into smaller modules",
+      "related_issues": [],
+      "detected_at": "2026-07-16T16:01:38.253777"
+    },
+    {
+      "title": "Low test count in visual.spec.ts",
+      "severity": "low",
+      "category": "testing",
+      "file_path": "tests\\visual.spec.ts",
+      "line_number": 1,
+      "description": "Test file has only 1 tests",
+      "evidence": "Test count: 1",
+      "impact": "Limited test coverage",
+      "suggested_fix": "Add more tests for better coverage",
+      "related_issues": [],
+      "detected_at": "2026-07-16T16:01:39.316346"
+    }
+  ]
+}

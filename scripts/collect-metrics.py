@@ -60,13 +60,13 @@ def collect_build_time(project_dir: str) -> dict:
 
 def collect_typescript_errors(project_dir: str) -> dict:
     """Run tsc --noEmit and count errors."""
-    tsc_cmd = os.path.join(project_dir, "node_modules", ".bin", "tsc")
-    if not os.path.exists(tsc_cmd):
-        tsc_cmd = os.path.join(project_dir, "node_modules", ".bin", "tsc.cmd")
+    # Use node to invoke tsc directly (avoids Windows path issues with shell=True)
+    tsc_js = os.path.join(project_dir, "node_modules", "typescript", "bin", "tsc")
+    if not os.path.exists(tsc_js):
+        tsc_js = os.path.join(project_dir, "node_modules", "typescript", "bin", "tsc.js")
     result = subprocess.run(
-        [tsc_cmd, "--noEmit"],
-        capture_output=True, text=True, cwd=project_dir, timeout=60,
-        shell=True
+        ["node", tsc_js, "--noEmit"],
+        capture_output=True, text=True, cwd=project_dir, timeout=60
     )
     error_lines = [l for l in result.stdout.split("\n") if "error TS" in l]
     return {

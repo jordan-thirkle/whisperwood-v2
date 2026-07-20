@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { AmbientParticles } from '../environment/AmbientParticles';
+import { ForestBuilder, type ForestConfig } from '../environment/ForestBuilder';
+import { WaterFeature } from '../environment/WaterFeature';
 import { InputController } from '../core/InputController';
 import { Loop } from '../core/Loop';
 import { createRenderer, resizeRenderer } from '../core/Renderer';
@@ -18,10 +21,21 @@ const ARENA: ArenaBounds = {
   halfDepth: 22,
 };
 
+const FOREST_CFG: ForestConfig = {
+  halfWidth: ARENA.halfWidth,
+  halfDepth: ARENA.halfDepth,
+  treeCount: 35,
+  bushCount: 30,
+  rockCount: 18,
+  grassPatchCount: 60,
+  stumpCount: 8,
+  thornCount: 6,
+};
+
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(48, 1, 0.1, 120);
+  private readonly camera = new THREE.PerspectiveCamera(48, 1, 0.1, 150);
   private readonly input: InputController;
   private readonly player = new Player();
   private readonly pickups: Pickup[] = [];
@@ -39,7 +53,7 @@ export class Game {
     dashMultiplier: 1.75,
     acceleration: 13,
     cameraLag: 0.16,
-    exposure: 1.05,
+    exposure: 1.08,
     maxDpr: 2,
   };
 
@@ -52,14 +66,15 @@ export class Game {
   private pausedForScreenshot = false;
   private reducedMotion = false;
 
-  // Forest elements
-  private readonly trees: THREE.Group[] = [];
-  private readonly fireflies: THREE.Points[] = [];
-  private dayNightCycle = 0;
-
-  // v1 additions
+  // v2 additions
+  private readonly forest!: THREE.Group;
+  private readonly water!: WaterFeature;
+  private readonly ambientParticles!: AmbientParticles;
   private postProcessing!: PostProcessing;
   private collectEffects!: CollectEffectPool;
+
+  // Obstacle slow-down state
+  private obstacleSlowTimer = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
@@ -76,9 +91,17 @@ export class Game {
       resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
     });
 
+    // Build environment
+    const forestBuilder = new ForestBuilder(1);
+    this.forest = forestBuilder.build(FOREST_CFG);
+    this.water = new WaterFeature(8, -6, 2.5);
+    this.ambientParticles = new AmbientParticles(
+      ARENA.halfWidth, ARENA.halfDepth, 42,
+    );
+
     this.createScene();
     this.postProcessing = new PostProcessing(this.renderer, this.scene, this.camera);
-    this.collectEffects = new CollectEffectPool(this.scene, 5);
+    this.collectEffects = new CollectEffectPool(this.scene, 8);
     this.hud.setTarget(this.pickups.length);
     this.cameraRig.snapTo(this.player.group.position);
     resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
@@ -97,23 +120,20 @@ export class Game {
     this.debugTools.dispose();
     this.postProcessing.dispose();
     this.collectEffects.dispose();
+    this.ambientParticles.dispose();
+    this.water.dispose();
     for (const pickup of this.pickups) pickup.dispose();
-    for (const tree of this.trees) {
-      tree.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
-          if (Array.isArray(child.material)) {
-            child.material.forEach((m) => m.dispose());
-          } else {
-            child.material.dispose();
-          }
+    // Dispose forest
+    this.forest.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        if (Array.isArray(child.material)) {
+          child.material.forEach((m) => m.dispose());
+        } else {
+          child.material.dispose();
         }
-      });
-    }
-    for (const ff of this.fireflies) {
-      ff.geometry.dispose();
-      (ff.material as THREE.Material).dispose();
-    }
+      }
+    });
     this.player.dispose();
     this.renderer.dispose();
     window.__THREE_GAME_DIAGNOSTICS__ = undefined;
@@ -132,15 +152,31 @@ export class Game {
     this.postProcessing.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
     const animDelta = this.reducedMotion ? 0 : delta;
     const animElapsed = this.reducedMotion ? 0 : elapsed;
-    this.player.update(delta, animElapsed, this.input, this.tuning, ARENA);
+
+    // Obstacle slow-down timer
+    if (this.obstacleSlowTimer > 0) {
+      this.obstacleSlowTimer -= delta;
+    }
+
+    // Player update with obstacle awareness
+    const effectiveTuning = this.obstacleSlowTimer > 0
+      ? { ...this.tuning, speed: this.tuning.speed * 0.4 }
+      : this.tuning;
+    this.player.update(delta, animElapsed, this.input, effectiveTuning, ARENA);
+
+    // Check obstacle collisions
+    this.checkObstacleCollisions();
 
     // Animate pickups
     for (const pickup of this.pickups) {
       pickup.update(animDelta, animElapsed);
     }
 
-    // Animate fireflies
-    this.updateFireflies(animElapsed);
+    // Water animation
+    this.water.update(delta, animElapsed);
+
+    // Ambient particles
+    this.ambientParticles.update(delta, animElapsed);
 
     // Collect pickups
     const collected = this.collision.collectPickups(this.player.group.position, this.pickups, 0.7);
@@ -149,11 +185,11 @@ export class Game {
       this.audio.pickup(pickup.index);
       this.hud.flashPickup();
 
-      // v1: Particle burst on collect
+      // Particle burst on collect
       const color = this.getPickupColor(pickup);
       this.collectEffects.trigger(pickup.group.position.clone(), color);
 
-      // Screen shake on collection — subtle, scales with progress
+      // Screen shake — scales with progress
       const shakeIntensity = 0.08 + (this.score / this.pickups.length) * 0.04;
       this.cameraRig.triggerShake(shakeIntensity, 0.25);
     }
@@ -163,7 +199,7 @@ export class Game {
     }
 
     // Day/night cycle (very slow)
-    this.dayNightCycle += delta * 0.02;
+    this.rng = createSeededRandom(1); // keep deterministic
     this.updateDayNight();
 
     this.cameraRig.update(delta, this.player.group.position, this.tuning.cameraLag);
@@ -177,227 +213,63 @@ export class Game {
   }
 
   private createScene(): void {
-    // Forest atmosphere — warm greens and golden light
-    this.scene.background = new THREE.Color('#1a2e1a');
-    this.scene.fog = new THREE.Fog('#1a2e1a', 25, 65);
+    // ── Atmosphere ──
+    this.scene.background = new THREE.Color('#152615');
+    this.scene.fog = new THREE.Fog('#152615', 30, 75);
 
-    // Golden hour hemisphere light
-    const hemisphere = new THREE.HemisphereLight('#f6e8c8', '#2d4a2d', 1.2);
+    // ── Lighting — golden hour with enhanced setup ──
+
+    // Hemisphere — warm sky / green ground bounce
+    const hemisphere = new THREE.HemisphereLight('#f6e8c8', '#2d4a2d', 1.3);
     this.scene.add(hemisphere);
 
-    // Warm directional sunlight
-    const sun = new THREE.DirectionalLight('#ffe4a0', 2.2);
-    sun.position.set(-8, 12, 8);
+    // Main sun — warm directional with high-res shadows
+    const sun = new THREE.DirectionalLight('#ffe4a0', 2.4);
+    sun.position.set(-10, 15, 10);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.near = 0.5;
-    sun.shadow.camera.far = 50;
-    sun.shadow.camera.left = -28;
-    sun.shadow.camera.right = 28;
-    sun.shadow.camera.top = 28;
-    sun.shadow.camera.bottom = -28;
-    sun.shadow.bias = -0.001;
+    sun.shadow.camera.far = 60;
+    sun.shadow.camera.left = -32;
+    sun.shadow.camera.right = 32;
+    sun.shadow.camera.top = 32;
+    sun.shadow.camera.bottom = -32;
+    sun.shadow.bias = -0.0008;
+    sun.shadow.normalBias = 0.02;
     this.scene.add(sun);
 
-    // Soft fill light from opposite side
-    const fill = new THREE.DirectionalLight('#b8d4e8', 0.4);
-    fill.position.set(6, 8, -6);
+    // Fill light — cooler from opposite side
+    const fill = new THREE.DirectionalLight('#b8d4e8', 0.45);
+    fill.position.set(8, 10, -8);
     this.scene.add(fill);
 
-    // Forest floor
-    this.scene.add(this.createForestFloor());
+    // Rim light — warm backlight for depth
+    const rim = new THREE.DirectionalLight('#ffd080', 0.6);
+    rim.position.set(0, 8, -15);
+    this.scene.add(rim);
 
-    // Trees
-    this.createForest();
+    // Bounce light — subtle green from below
+    const bounce = new THREE.PointLight('#406030', 0.3, 30);
+    bounce.position.set(0, -2, 0);
+    this.scene.add(bounce);
 
-    // Player
+    // Ambient — base fill so shadows aren't pure black
+    const ambient = new THREE.AmbientLight('#1a2a1a', 0.15);
+    this.scene.add(ambient);
+
+    // ── Environment ──
+    this.scene.add(this.forest);
+    this.scene.add(this.water.group);
+    this.scene.add(this.ambientParticles.group);
+
+    // ── Player ──
     this.scene.add(this.player.group);
 
-    // Pickups (mushrooms, flowers, crystals)
+    // ── Pickups ──
     this.createPickups();
-
-    // Fireflies
-    this.createFireflies();
-  }
-
-  private createForestFloor(): THREE.Mesh {
-    const size = 512;
-    const textureCanvas = document.createElement('canvas');
-    textureCanvas.width = size;
-    textureCanvas.height = size;
-    const ctx = textureCanvas.getContext('2d')!;
-
-    // Base forest floor — rich dark green-brown
-    ctx.fillStyle = '#2a3a22';
-    ctx.fillRect(0, 0, size, size);
-
-    // Grass patches
-    for (let i = 0; i < 800; i++) {
-      const x = Math.random() * size;
-      const y = Math.random() * size;
-      const height = 2 + Math.random() * 6;
-      const shade = Math.random() * 30;
-      ctx.strokeStyle = `rgb(${60 + shade}, ${90 + shade}, ${40 + shade})`;
-      ctx.lineWidth = 0.5 + Math.random();
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + (Math.random() - 0.5) * 4, y - height);
-      ctx.stroke();
-    }
-
-    // Leaf litter
-    for (let i = 0; i < 200; i++) {
-      const x = Math.random() * size;
-      const y = Math.random() * size;
-      ctx.fillStyle = `rgba(${140 + Math.random() * 60}, ${100 + Math.random() * 40}, ${40 + Math.random() * 30}, 0.3)`;
-      ctx.beginPath();
-      ctx.ellipse(x, y, 2 + Math.random() * 4, 1 + Math.random() * 2, Math.random() * Math.PI, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Moss patches
-    for (let i = 0; i < 30; i++) {
-      const x = Math.random() * size;
-      const y = Math.random() * size;
-      const radius = 8 + Math.random() * 15;
-      const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
-      gradient.addColorStop(0, 'rgba(50, 80, 35, 0.4)');
-      gradient.addColorStop(1, 'rgba(50, 80, 35, 0)');
-      ctx.fillStyle = gradient;
-      ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-    }
-
-    const texture = new THREE.CanvasTexture(textureCanvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(6, 6);
-
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(ARENA.halfWidth * 2, ARENA.halfDepth * 2, 1, 1),
-      new THREE.MeshStandardMaterial({
-        map: texture,
-        roughness: 0.85,
-        metalness: 0.02,
-      }),
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    return floor;
-  }
-
-  private createForest(): void {
-    const treePositions: [number, number, number][] = [
-      // Outer ring — tall trees
-      [-18, 0, -18], [-12, 0, -20], [-5, 0, -19], [3, 0, -21], [10, 0, -18], [17, 0, -20],
-      [-20, 0, -10], [-19, 0, -3], [-21, 0, 5], [-18, 0, 12], [-20, 0, 18],
-      [20, 0, -10], [19, 0, -3], [21, 0, 5], [18, 0, 12], [20, 0, 18],
-      [-15, 0, 20], [-8, 0, 22], [0, 0, 21], [8, 0, 20], [15, 0, 19],
-      // Inner trees — scattered
-      [-14, 0, -8], [-10, 0, 5], [-6, 0, -12], [-3, 0, 10],
-      [5, 0, -8], [8, 0, 6], [12, 0, -5], [14, 0, 10],
-      [-8, 0, -6], [2, 0, -14], [6, 0, 14], [11, 0, -14],
-      [-16, 0, 0], [16, 0, 0], [0, 0, -16], [0, 0, 16],
-    ];
-
-    for (const [x, y, z] of treePositions) {
-      const tree = this.createTree(x, y, z);
-      this.trees.push(tree);
-      this.scene.add(tree);
-    }
-
-    // Scattered bushes
-    for (let i = 0; i < 25; i++) {
-      const x = (this.rng() - 0.5) * ARENA.halfWidth * 1.6;
-      const z = (this.rng() - 0.5) * ARENA.halfDepth * 1.6;
-      const bush = this.createBush(x, z);
-      this.scene.add(bush);
-    }
-
-    // Rocks
-    for (let i = 0; i < 15; i++) {
-      const x = (this.rng() - 0.5) * ARENA.halfWidth * 1.6;
-      const z = (this.rng() - 0.5) * ARENA.halfDepth * 1.6;
-      const rock = this.createRock(x, z);
-      this.scene.add(rock);
-    }
-  }
-
-  private createTree(x: number, _y: number, z: number): THREE.Group {
-    const tree = new THREE.Group();
-    const height = 4 + this.rng() * 5;
-    const trunkRadius = 0.15 + this.rng() * 0.15;
-
-    // Trunk
-    const trunkGeo = new THREE.CylinderGeometry(trunkRadius * 0.6, trunkRadius, height, 8);
-    const trunkMat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color().setHSL(0.08, 0.5, 0.2 + this.rng() * 0.1),
-      roughness: 0.9,
-    });
-    const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-    trunk.position.y = height / 2;
-    trunk.castShadow = true;
-    trunk.receiveShadow = true;
-    tree.add(trunk);
-
-    // Canopy — layered cones for pine-tree look, with rotation and scale variation
-    const layers = 2 + Math.floor(this.rng() * 2);
-    for (let i = 0; i < layers; i++) {
-      const layerY = height * 0.5 + i * (height * 0.25);
-      const layerRadius = (2.5 - i * 0.6) * (0.8 + this.rng() * 0.4);
-      const layerHeight = 2 + this.rng() * 1.5;
-      const canopyGeo = new THREE.ConeGeometry(layerRadius, layerHeight, 8);
-      const canopyMat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color().setHSL(0.28 + this.rng() * 0.08, 0.55, 0.18 + this.rng() * 0.12),
-        roughness: 0.8,
-      });
-      const canopy = new THREE.Mesh(canopyGeo, canopyMat);
-      canopy.position.y = layerY;
-      // Slight random tilt for organic look
-      canopy.rotation.y = this.rng() * Math.PI * 2;
-      canopy.rotation.x = (this.rng() - 0.5) * 0.15;
-      canopy.rotation.z = (this.rng() - 0.5) * 0.15;
-      // Slight scale variation per layer
-      const scaleVar = 0.9 + this.rng() * 0.2;
-      canopy.scale.set(scaleVar, 0.95 + this.rng() * 0.1, scaleVar);
-      canopy.castShadow = true;
-      tree.add(canopy);
-    }
-
-    tree.position.set(x, 0, z);
-    return tree;
-  }
-
-  private createBush(x: number, z: number): THREE.Mesh {
-    const size = 0.4 + this.rng() * 0.8;
-    const geo = new THREE.SphereGeometry(size, 8, 6);
-    const mat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color().setHSL(0.3 + this.rng() * 0.1, 0.5, 0.15 + this.rng() * 0.1),
-      roughness: 0.85,
-    });
-    const bush = new THREE.Mesh(geo, mat);
-    bush.position.set(x, size * 0.6, z);
-    bush.scale.y = 0.7;
-    bush.castShadow = true;
-    return bush;
-  }
-
-  private createRock(x: number, z: number): THREE.Mesh {
-    const size = 0.3 + this.rng() * 0.5;
-    const geo = new THREE.DodecahedronGeometry(size, 0);
-    const mat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color().setHSL(0.1, 0.1, 0.3 + this.rng() * 0.15),
-      roughness: 0.95,
-    });
-    const rock = new THREE.Mesh(geo, mat);
-    rock.position.set(x, size * 0.4, z);
-    rock.rotation.set(this.rng(), this.rng(), this.rng());
-    rock.castShadow = true;
-    return rock;
   }
 
   private createPickups(): void {
-    // Place pickups in forest-clearing-like positions
     const positions: [number, number][] = [
       [-10, -8], [-5, -12], [4, -10], [10, -6],
       [-8, 5], [-3, 10], [6, 8], [12, 3],
@@ -405,7 +277,7 @@ export class Game {
       [14, -8], [-12, 10], [3, 15],
     ];
 
-    const types: ('mushroom' | 'flower' | 'crystal' | 'firefly_cluster')[] = [
+    const types: PickupType[] = [
       'mushroom', 'flower', 'crystal', 'firefly_cluster',
       'mushroom', 'flower', 'crystal', 'mushroom',
       'flower', 'mushroom', 'crystal', 'flower',
@@ -420,51 +292,28 @@ export class Game {
     });
   }
 
-  private createFireflies(): void {
-    for (let i = 0; i < 3; i++) {
-      const count = 40 + Math.floor(this.rng() * 30);
-      const positions = new Float32Array(count * 3);
-      for (let j = 0; j < count; j++) {
-        positions[j * 3] = (this.rng() - 0.5) * ARENA.halfWidth * 1.5;
-        positions[j * 3 + 1] = 0.5 + this.rng() * 3;
-        positions[j * 3 + 2] = (this.rng() - 0.5) * ARENA.halfDepth * 1.5;
+  private checkObstacleCollisions(): void {
+    const playerPos = this.player.group.position;
+    // Check thorn bushes and stumps
+    this.forest.traverse((child) => {
+      if (child instanceof THREE.Group) {
+        const name = child.name;
+        if (name === 'thorn-bush' || name === 'stump') {
+          const dist = playerPos.distanceTo(child.position);
+          if (dist < 1.2) {
+            this.obstacleSlowTimer = 0.5;
+            // Push player away slightly
+            const dir = new THREE.Vector3().subVectors(playerPos, child.position).normalize();
+            playerPos.addScaledVector(dir, 0.05);
+          }
+        }
       }
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      const mat = new THREE.PointsMaterial({
-        color: '#ffe88a',
-        size: 0.12,
-        transparent: true,
-        opacity: 0.7,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-      const points = new THREE.Points(geo, mat);
-      this.fireflies.push(points);
-      this.scene.add(points);
-    }
-  }
-
-  private updateFireflies(elapsed: number): void {
-    for (const ff of this.fireflies) {
-      const pos = ff.geometry.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < pos.count; i++) {
-        const x = pos.getX(i);
-        const y = pos.getY(i);
-        const z = pos.getZ(i);
-        pos.setX(i, x + Math.sin(elapsed * 0.5 + i * 0.7) * 0.003);
-        pos.setY(i, y + Math.sin(elapsed * 0.8 + i * 1.3) * 0.002);
-        pos.setZ(i, z + Math.cos(elapsed * 0.6 + i * 0.9) * 0.003);
-      }
-      pos.needsUpdate = true;
-      // Pulsing glow
-      (ff.material as THREE.PointsMaterial).opacity = 0.4 + Math.sin(elapsed * 1.5) * 0.3;
-    }
+    });
   }
 
   private updateDayNight(): void {
-    const t = (Math.sin(this.dayNightCycle) + 1) / 2; // 0-1
-    const fogColor = new THREE.Color('#1a2e1a').lerp(new THREE.Color('#0a120a'), t * 0.3);
+    const t = (Math.sin(this.elapsed * 0.02) + 1) / 2;
+    const fogColor = new THREE.Color('#152615').lerp(new THREE.Color('#080e08'), t * 0.3);
     this.scene.fog!.color = fogColor;
     this.scene.background = fogColor;
   }
@@ -495,6 +344,7 @@ export class Game {
     this.score = 0;
     this.elapsed = 0;
     this.complete = false;
+    this.obstacleSlowTimer = 0;
     this.player.group.position.set(0, this.player.group.position.y, 0);
     this.player.velocity.set(0, 0, 0);
     for (const pickup of this.pickups) {
@@ -516,7 +366,6 @@ export class Game {
   }
 
   private getPickupColor(pickup: Pickup): THREE.Color {
-    // Match the pickup type to its visual color for particle burst
     const type = (pickup as unknown as { type: string }).type;
     switch (type) {
       case 'mushroom': return new THREE.Color('#c44a2a');
@@ -565,3 +414,5 @@ export class Game {
     return element;
   }
 }
+
+type PickupType = 'mushroom' | 'flower' | 'crystal' | 'firefly_cluster';
